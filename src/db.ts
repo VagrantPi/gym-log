@@ -83,27 +83,41 @@ export function listSetLogs(sessionId: number, exerciseId: number): Promise<SetL
     .then((rows) => rows.sort((a, b) => a.setIndex - b.setIndex))
 }
 
-/** 第一次進到某器材時建立目標組數的空白列，數值預填上次的紀錄 */
+/** 第一次進到某器材時建立第 1 組，數值帶入上一場的第 1 組 */
 export async function ensureSetLogs(sessionId: number, exercise: Exercise): Promise<void> {
   const exerciseId = exercise.id!
   const last = await getLastPerformance(exerciseId, sessionId)
   await db.transaction('rw', db.setLogs, async () => {
     const count = await db.setLogs.where('[sessionId+exerciseId]').equals([sessionId, exerciseId]).count()
     if (count > 0) return
-    const now = Date.now()
-    const rows: SetLog[] = Array.from({ length: exercise.targetSets }, (_, i) => {
-      const prev = last?.sets[Math.min(i, last.sets.length - 1)]
-      return {
-        sessionId,
-        exerciseId,
-        setIndex: i,
-        weight: prev?.weight ?? 0,
-        reps: prev?.reps ?? exercise.targetReps,
-        done: false,
-        updatedAt: now,
-      }
+    const prev = last?.sets[0]
+    await db.setLogs.add({
+      sessionId,
+      exerciseId,
+      setIndex: 0,
+      weight: prev?.weight ?? 0,
+      reps: prev?.reps ?? exercise.targetReps,
+      done: false,
+      updatedAt: Date.now(),
     })
-    await db.setLogs.bulkAdd(rows)
+  })
+}
+
+/**
+ * 舊版進入器材時會一次預建目標組數的未打勾列。
+ * 每個「場次＋器材」只保留 setIndex 最小的未打勾列，已打勾的不動。
+ */
+export async function cleanupLegacyOpenSets(): Promise<void> {
+  await db.transaction('rw', db.setLogs, async () => {
+    const open = (await db.setLogs.toArray()).filter((l) => !l.done)
+    const keep = new Map<string, SetLog>()
+    for (const l of open) {
+      const key = `${l.sessionId}:${l.exerciseId}`
+      const cur = keep.get(key)
+      if (!cur || l.setIndex < cur.setIndex) keep.set(key, l)
+    }
+    const keepIds = new Set([...keep.values()].map((l) => l.id))
+    await db.setLogs.bulkDelete(open.filter((l) => !keepIds.has(l.id)).map((l) => l.id!))
   })
 }
 

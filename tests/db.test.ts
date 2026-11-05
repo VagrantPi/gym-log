@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   addSet,
+  cleanupLegacyOpenSets,
   clearDay,
   db,
   ensureSetLogs,
@@ -19,9 +20,14 @@ async function makeExercise(menuId: number, order: number, name: string): Promis
   return (await db.exercises.get(id))!
 }
 
-async function finishAll(sessionId: number, exerciseId: number, weights: number[]) {
-  const rows = await listSetLogs(sessionId, exerciseId)
-  for (const [i, r] of rows.entries()) await updateSetLog(r.id!, { weight: weights[i], done: true })
+/** 模擬新流程：第 1 組自動建立，之後每組都是「打勾 → 加一組」 */
+async function doSets(sessionId: number, ex: Exercise, weights: number[]) {
+  await ensureSetLogs(sessionId, ex)
+  for (const [i, w] of weights.entries()) {
+    if (i > 0) await addSet(sessionId, ex.id!)
+    const row = (await listSetLogs(sessionId, ex.id!)).at(-1)!
+    await updateSetLog(row.id!, { weight: w, done: true })
+  }
 }
 
 beforeEach(async () => {
@@ -56,10 +62,10 @@ describe('setDayPlan', () => {
     const ex = await makeExercise(upper.id!, 0, '胸推')
     const sid = await setDayPlan('2026-11-05', SessionType.MENU, upper.id)
     await ensureSetLogs(sid, ex)
-    expect(await db.setLogs.count()).toBe(3)
+    expect(await db.setLogs.count()).toBe(1)
 
     expect(await setDayPlan('2026-11-05', SessionType.MENU, upper.id)).toBe(sid)
-    expect(await db.setLogs.count()).toBe(3)
+    expect(await db.setLogs.count()).toBe(1)
 
     expect(await setDayPlan('2026-11-05', SessionType.MENU, lower.id)).toBe(sid)
     expect(await db.sessions.count()).toBe(1)
@@ -86,14 +92,14 @@ describe('getLastPerformance / ensureSetLogs', () => {
     expect(await getLastPerformance(ex.id!)).toBeNull()
 
     const s1 = await setDayPlan('2026-11-01', SessionType.MENU, upper.id)
-    await ensureSetLogs(s1, ex)
-    await finishAll(s1, ex.id!, [30, 35, 35])
+    await doSets(s1, ex, [30, 35, 35])
 
     const s2 = await setDayPlan('2026-11-03', SessionType.MENU, upper.id)
     await ensureSetLogs(s2, ex)
-    // 預填自 11/01
-    expect((await listSetLogs(s2, ex.id!)).map((r) => r.weight)).toEqual([30, 35, 35])
-    await finishAll(s2, ex.id!, [40, 42.5, 40])
+    // 只建第 1 組，帶入 11/01 的第 1 組
+    expect((await listSetLogs(s2, ex.id!)).map((r) => [r.weight, r.done])).toEqual([[30, false]])
+    await db.setLogs.where('sessionId').equals(s2).delete()
+    await doSets(s2, ex, [40, 42.5, 40])
 
     const last = await getLastPerformance(ex.id!)
     expect(last).toMatchObject({ date: '2026-11-03', weight: 42.5 })
@@ -107,21 +113,43 @@ describe('getLastPerformance / ensureSetLogs', () => {
     expect((await getLastPerformance(ex.id!))?.date).toBe('2026-11-03')
   })
 
-  it('ensureSetLogs 重複呼叫不會重複建立；addSet 沿用上一組數值', async () => {
+  it('ensureSetLogs 只建 1 組且重複呼叫不重建；addSet 帶入最後一組的重量與次數', async () => {
     const [upper] = await db.menus.orderBy('order').toArray()
     const ex = await makeExercise(upper.id!, 0, '划船')
     const sid = await setDayPlan('2026-11-05', SessionType.MENU, upper.id)
     await ensureSetLogs(sid, ex)
     await ensureSetLogs(sid, ex)
     const rows = await listSetLogs(sid, ex.id!)
-    expect(rows).toHaveLength(3)
-    expect(rows[0].reps).toBe(10)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ setIndex: 0, weight: 0, reps: 10, done: false })
 
-    await updateSetLog(rows[2].id!, { weight: 50 })
+    await updateSetLog(rows[0].id!, { weight: 50, reps: 8, done: true })
     await addSet(sid, ex.id!)
     const after = await listSetLogs(sid, ex.id!)
-    expect(after).toHaveLength(4)
-    expect(after[3]).toMatchObject({ setIndex: 3, weight: 50, reps: 10, done: false })
+    expect(after).toHaveLength(2)
+    expect(after[1]).toMatchObject({ setIndex: 1, weight: 50, reps: 8, done: false })
+  })
+})
+
+describe('cleanupLegacyOpenSets', () => {
+  it('舊版預建的未打勾列每個場次＋器材只留最前面一列，已打勾不動，重跑無影響', async () => {
+    const [upper] = await db.menus.orderBy('order').toArray()
+    const a = await makeExercise(upper.id!, 0, 'A')
+    const b = await makeExercise(upper.id!, 1, 'B')
+    const sid = await setDayPlan('2026-11-05', SessionType.MENU, upper.id)
+    const row = (exerciseId: number, setIndex: number, weight: number, done: boolean) => ({
+      sessionId: sid, exerciseId, setIndex, weight, reps: 10, done, updatedAt: 0,
+    })
+    // 舊版：A 勾了前 2 組、第 3 組打了數字沒勾；B 一組都沒勾
+    await db.setLogs.bulkAdd([
+      row(a.id!, 0, 40, true), row(a.id!, 1, 42, true), row(a.id!, 2, 45, false), row(a.id!, 3, 0, false),
+      row(b.id!, 0, 20, false), row(b.id!, 1, 0, false), row(b.id!, 2, 0, false), row(b.id!, 3, 0, false),
+    ])
+    await cleanupLegacyOpenSets()
+    await cleanupLegacyOpenSets()
+    const pick = async (id: number) => (await listSetLogs(sid, id)).map((r) => [r.setIndex, r.weight, r.done])
+    expect(await pick(a.id!)).toEqual([[0, 40, true], [1, 42, true], [2, 45, false]])
+    expect(await pick(b.id!)).toEqual([[0, 20, false]])
   })
 })
 

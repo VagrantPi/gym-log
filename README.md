@@ -35,3 +35,10 @@ npx vite preview --port 4173 & npm run e2e   # iPhone 模擬完整流程
 ## 部署
 
 push 到 `main` 會由 GitHub Actions 自動 build 並部署到 GitHub Pages（repo Settings → Pages → Source 選 GitHub Actions）。
+
+## 更新與離線
+
+- Service Worker 用 `autoUpdate`、但不 import `virtual:pwa-register`：新版會在背景接手，**不會強制重新整理頁面**，訓練到一半不會被打斷，下次打開 app 才是新版。
+- 整個 app 是單一 JS bundle，舊頁面在新 SW 接手後不會去抓已被清掉的 chunk。
+- 改資料結構時避免升 IndexedDB 版本；需要整理舊資料就像 `cleanupLegacyOpenSets` 一樣，在啟動時跑一次並用 localStorage 記號防止重跑。
+- 數字輸入是打字當下就寫入 IndexedDB，app 被關掉或重新載入也不會丟。

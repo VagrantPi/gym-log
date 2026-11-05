@@ -107,12 +107,14 @@ export default function Workout() {
           {logs?.map((log, i) => (
             <SetRow key={log.id} log={log} number={i + 1} color={menu.color} canRemove={logs.length > 1} />
           ))}
-          <button
-            onClick={() => addSet(sessionId, exercise.id!)}
-            className="w-full rounded-2xl border-2 border-dashed border-zinc-700 py-3 text-zinc-300"
-          >
-            ＋ 加一組
-          </button>
+          {logs?.length !== 0 && logs?.every((l) => l.done) && (
+            <button
+              onClick={() => addSet(sessionId, exercise.id!)}
+              className="w-full rounded-2xl border-2 border-dashed border-zinc-700 py-3 text-zinc-300"
+            >
+              ＋ 加一組
+            </button>
+          )}
         </section>
       </div>
 

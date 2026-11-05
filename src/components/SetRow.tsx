@@ -10,11 +10,30 @@ export default function SetRow({ log, number, color, canRemove }: {
   canRemove: boolean
 }) {
   const id = log.id!
+
+  // 已完成：縮成一行，點一下重新展開修改
+  if (log.done)
+    return (
+      <button
+        data-testid="set-row"
+        data-done="true"
+        onClick={() => updateSetLog(id, { done: false })}
+        aria-label={`修改第 ${number} 組`}
+        className="flex w-full items-center gap-3 rounded-2xl bg-zinc-900 px-4 py-3 text-left"
+      >
+        <span className="w-14 text-sm text-zinc-500">第 {number} 組</span>
+        <span className="flex-1 text-xl font-bold tabular-nums">
+          {log.weight} <span className="text-sm font-normal text-zinc-400">kg</span> × {log.reps}{' '}
+          <span className="text-sm font-normal text-zinc-400">下</span>
+        </span>
+        <span className="text-2xl font-bold" style={{ color }}>
+          ✓
+        </span>
+      </button>
+    )
+
   return (
-    <div
-      data-testid="set-row"
-      className={`flex items-stretch gap-3 rounded-2xl p-3 transition-colors ${log.done ? 'bg-zinc-800/60' : 'bg-zinc-900'}`}
-    >
+    <div data-testid="set-row" data-done="false" className="flex items-stretch gap-3 rounded-2xl bg-zinc-900 p-3">
       <div className="flex w-8 flex-col items-center justify-center">
         <span className="text-xs text-zinc-500">第</span>
         <span className="text-2xl font-bold">{number}</span>
@@ -30,11 +49,10 @@ export default function SetRow({ log, number, color, canRemove }: {
         )}
       </div>
       <button
-        onClick={() => updateSetLog(id, { done: !log.done })}
-        aria-label={log.done ? '取消完成' : '完成這組'}
-        aria-pressed={log.done}
+        onClick={() => updateSetLog(id, { done: true })}
+        aria-label="完成這組"
         className="w-16 shrink-0 rounded-xl border-2 text-3xl font-bold"
-        style={log.done ? { background: color, borderColor: color, color: '#000' } : { borderColor: '#3f3f46', color: '#52525b' }}
+        style={{ borderColor: color, color }}
       >
         ✓
       </button>
